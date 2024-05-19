@@ -4,15 +4,15 @@ use crate::error::Result;
 use crate::utils::JsonStream;
 use futures::prelude::*;
 use reqwest::header::AUTHORIZATION;
-use reqwest::{Client, IntoUrl, Method, Url};
+use reqwest::{Client, IntoUrl, Method, Proxy, Url};
 use serde::de::DeserializeOwned;
 use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct TwitterApi<A> {
-    client: Client,
-    base_url: Url,
-    auth: Arc<A>,
+    pub client: Client,
+    pub base_url: Url,
+    pub auth: Arc<A>,
 }
 
 impl<A> TwitterApi<A>
@@ -20,8 +20,14 @@ where
     A: Authorization,
 {
     pub fn new(auth: A) -> Self {
+        let mut build = Client::builder().pool_max_idle_per_host(0);
+        if cfg!(debug_assertions) {
+            build = build
+                .proxy(Proxy::http("http://127.0.0.1:1087").unwrap())
+                .proxy(Proxy::https("http://127.0.0.1:1087").unwrap());
+        }
         Self {
-            client: Client::builder().pool_max_idle_per_host(0).build().unwrap(),
+            client: build.build().unwrap(),
             base_url: Url::parse("https://api.twitter.com/2/").unwrap(),
             auth: Arc::new(auth),
         }
@@ -36,6 +42,7 @@ where
     }
 
     pub(crate) fn request(&self, method: Method, url: impl IntoUrl) -> reqwest::RequestBuilder {
+        println!("{} {}", method.as_str(), url.as_str());
         self.client.request(method, url)
     }
 

@@ -3,15 +3,17 @@ use crate::error::{Error, Result};
 use async_trait::async_trait;
 use oauth2::basic::{BasicClient, BasicRequestTokenError, BasicTokenResponse};
 use oauth2::{
-    AccessToken, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
-    PkceCodeVerifier, RedirectUrl, RefreshToken, RevocationUrl, StandardRevocableToken,
-    TokenResponse, TokenUrl,
+    AccessToken, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpRequest,
+    HttpResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, RevocationUrl,
+    StandardRevocableToken, TokenResponse, TokenUrl,
 };
 use reqwest::header::HeaderValue;
-use reqwest::Request;
+use reqwest::{Body, Request};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::convert::{TryFrom, TryInto};
 use std::future::Future;
+use std::str::FromStr;
 use std::sync::Arc;
 use strum::{Display, EnumString};
 use time::OffsetDateTime;
@@ -130,17 +132,83 @@ impl Oauth2Client {
             .url()
     }
 
+    pub async fn async_http_client(request: HttpRequest) -> Result<HttpResponse, reqwest::Error> {
+        // let client = {
+        //     let builder = reqwest::Client::builder();
+
+        //     // Following redirects opens the client up to SSRF vulnerabilities.
+        //     // but this is not possible to prevent on wasm targets
+        //     #[cfg(not(target_arch = "wasm32"))]
+        //     let builder = builder.redirect(reqwest::redirect::Policy::none());
+
+        //     builder.build().map_err(Error::Reqwest)?
+        // };
+
+        let mut build = reqwest::Client::builder().pool_max_idle_per_host(0);
+
+        if cfg!(debug_assertions) {
+            println!("twitter 使用代理");
+            build = build
+                .proxy(reqwest::Proxy::http("http://127.0.0.1:1087").unwrap())
+                .proxy(reqwest::Proxy::https("http://127.0.0.1:1087").unwrap());
+        }
+
+        let client = build.build().unwrap();
+
+        // let ingnore_str = "%2Fingnore";
+        let body = String::from_utf8(request.body.clone()).unwrap();
+
+        let body = format!("{}&client_id=RWRhdU9VQkJvOUVqZEFvazhMNWg6MTpjaQ", body)
+            .as_bytes()
+            .to_vec();
+
+        println!("body === {}", String::from_utf8(body.clone()).unwrap());
+
+        let mut request_builder = client
+            .request(request.method, request.url.as_str())
+            .body(body);
+        for (name, value) in &request.headers {
+            println!("header {:?} {:?}", name, value);
+            request_builder = request_builder.header(name.as_str(), value.as_bytes());
+        }
+        let request = request_builder.build().unwrap();
+
+        let response = client.execute(request).await.unwrap();
+
+        let status_code = response.status();
+        let headers = response.headers().to_owned();
+        let chunks = response.bytes().await.unwrap();
+        Ok(HttpResponse {
+            status_code,
+            headers,
+            body: chunks.to_vec(),
+        })
+    }
+
     pub async fn request_token(
         &self,
         code: AuthorizationCode,
         verifier: PkceCodeVerifier,
+        redirect_url: &str,
     ) -> Result<Oauth2Token> {
+        let redirect_url = RedirectUrl::from_url(Url::from_str(redirect_url).unwrap());
         let res = self
             .0
             .exchange_code(code)
             .set_pkce_verifier(verifier)
-            .request_async(oauth2::reqwest::async_http_client)
-            .await?;
+            .set_redirect_uri(Cow::Owned(redirect_url))
+            .request_async(Self::async_http_client)
+            .await
+            .map_err(|_| Error::Custom("Invalid code".to_string()))?;
+
+        // let req = self.0.exchange_code(code).set_pkce_verifier(verifier);
+        // let res = req
+        //     .request_async(Self::async_http_client(req))
+        //     .await
+        //     .unwrap();
+
+        // let res = Self::async_http_client(req).await.unwrap();
+
         res.try_into()
     }
 
