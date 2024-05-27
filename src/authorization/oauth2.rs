@@ -162,13 +162,13 @@ impl Oauth2Client {
             .as_bytes()
             .to_vec();
 
-        println!("body === {}", String::from_utf8(body.clone()).unwrap());
+        // println!("body === {}", String::from_utf8(body.clone()).unwrap());
 
         let mut request_builder = client
             .request(request.method, request.url.as_str())
             .body(body);
         for (name, value) in &request.headers {
-            println!("header {:?} {:?}", name, value);
+            // println!("header {:?} {:?}", name, value);
             request_builder = request_builder.header(name.as_str(), value.as_bytes());
         }
         let request = request_builder.build().unwrap();
